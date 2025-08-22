@@ -17,6 +17,10 @@ from Interfaces.modeloprofessional import abrir_modelo_professional
 from Interfaces.ventaspagadasperiodohome import abrir_ventas_pagadas_home
 from Interfaces.ventaspagadasperiodoprofessional import abrir_ventas_pagadas_professional
 from Interfaces.Consulta.listadoobservaciones import abrir_listado_observaciones
+# IMPORTACIONES PARA LAS CONSULTAS
+from Interfaces.Consulta.c_homeprofessional import abrir_consulta_professional
+from Interfaces.Consulta.c_home import abrir_consulta_home
+
 
 # ------------------------- Configuración Inicial -------------------------
 def setup_logging():
@@ -72,6 +76,22 @@ class CompanyModel:
                     PRIMARY KEY (company_id, period, type)
                 );
             """)
+            # Nueva tabla para datos UF
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS uf_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha TEXT NOT NULL UNIQUE,
+                    valor REAL NOT NULL
+                );
+            """)
+           # Nueva tabla para datos UTM
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS utm_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha TEXT NOT NULL UNIQUE,
+                    valor REAL NOT NULL
+                );
+            """)
             conn.commit()
     
     def get_connection(self):
@@ -123,6 +143,57 @@ class CompanyModel:
             logger.error(f"Database error getting company info: {str(e)}")
             messagebox.showerror(tr("db_error"), str(e))
             return None
+            
+    # Nuevos métodos para manejar datos UF
+    def save_uf_data(self, fecha: str, valor: float) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO uf_data (fecha, valor) VALUES (?, ?)",
+                    (fecha, valor)
+                )
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Error guardando datos UF: {str(e)}")
+            return False
+            
+    def get_uf_data(self) -> list:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT fecha, valor FROM uf_data ORDER BY fecha")
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error obteniendo datos UF: {str(e)}")
+            return []
+    
+    # Nuevos métodos para manejar datos UTM
+    def save_utm_data(self, fecha: str, valor: float) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO utm_data (fecha, valor) VALUES (?, ?)",
+                    (fecha, valor)
+                )
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Error guardando datos UTM: {str(e)}")
+            return False
+            
+    def get_utm_data(self) -> list:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT fecha, valor FROM utm_data ORDER BY fecha")
+                return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error obteniendo datos UTM: {str(e)}")
+            return []
+
 
 # ------------------------- Controlador -------------------------
 class MainController:
@@ -175,8 +246,12 @@ class MainMenu(tk.Tk):
         super().__init__()
         self.controller = controller
         self.title("Juego de Empresas - Menú Principal")
-        self.geometry("800x700")
-        self.resizable(True, True)  # Permitir redimensionamiento
+        self.geometry("1100x640")  # Tamaño aumentado para las imágenes
+        self.resizable(True, True)
+        
+        # Cargar imágenes
+        self.logo_udp = self._load_image("Logos_UDP.png")
+        self.logo_fae = self._load_image("Logos_FAE.png")
         
         self.current_company_id = None
         self.current_company_name = tk.StringVar()
@@ -186,10 +261,22 @@ class MainMenu(tk.Tk):
         self._populate_company_dropdown()
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
     
+    def _load_image(self, filename):
+        """Carga una imagen desde la carpeta de imágenes si existe"""
+        try:
+            img_path = Path(__file__).parent.parent / "imagenes" / filename
+            if img_path.exists():
+                return tk.PhotoImage(file=img_path)
+            logger.warning(f"Imagen no encontrada: {img_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Error cargando imagen {filename}: {str(e)}")
+            return None
+    
     def _create_scrollable_ui(self):
         """Configura la interfaz desplazable principal."""
         # Crear canvas y scrollbar
-        self.canvas = tk.Canvas(self, bg='#f0f0f0')
+        self.canvas = tk.Canvas(self, bg='#DCDAD5')
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         
         # Frame desplazable
@@ -198,7 +285,6 @@ class MainMenu(tk.Tk):
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
-        
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         
@@ -214,8 +300,26 @@ class MainMenu(tk.Tk):
         main_frame = ttk.Frame(self.scrollable_frame, padding="20")
         main_frame.pack(fill="both", expand=True)
 
-        ttk.Label(main_frame, text=tr("welcome"), font=('Century Gothic', 18, 'bold')).pack(pady=20)
+        # ------------------------- Logos -------------------------
+        logos_frame = ttk.Frame(main_frame)
+        logos_frame.pack(fill="x", pady=(0, 20))
+        
+        # Logo UDP (izquierda)
+        if self.logo_udp:
+            udp_label = ttk.Label(logos_frame, image=self.logo_udp)
+            udp_label.pack(side="left", padx=10)
+        
+        # Título central
+        title_frame = ttk.Frame(logos_frame)
+        title_frame.pack(side="left", expand=True)
+        ttk.Label(title_frame, text=tr("welcome"), font=('Century Gothic', 18, 'bold')).pack(pady=10)
+        
+        # Logo FAE (derecha)
+        if self.logo_fae:
+            fae_label = ttk.Label(logos_frame, image=self.logo_fae)
+            fae_label.pack(side="right", padx=10)
 
+        # ------------------------- Selección de empresa -------------------------
         company_period_frame = ttk.LabelFrame(main_frame, text=tr("company_selection"), padding="15")
         company_period_frame.pack(fill="x", pady=10)
 
@@ -254,6 +358,7 @@ class MainMenu(tk.Tk):
 
         company_period_frame.grid_columnconfigure(1, weight=1)
 
+        # ------------------------- Información actual -------------------------
         current_selection_frame = ttk.LabelFrame(main_frame, text=tr("current_company"), padding="10")
         current_selection_frame.pack(fill="x", pady=10)
         ttk.Label(current_selection_frame, text=tr("current_company")).grid(row=0, column=0, padx=5, pady=2, sticky='w')
@@ -262,45 +367,115 @@ class MainMenu(tk.Tk):
         ttk.Label(current_selection_frame, textvariable=self.current_period, font=('Century Gothic', 10, 'bold')).grid(row=1, column=1, padx=5, pady=2, sticky='w')
         current_selection_frame.grid_columnconfigure(1, weight=1)
 
-        menu_frame = ttk.LabelFrame(main_frame, text=tr("menu_title"), padding="15")
-        menu_frame.pack(fill="both", expand=True, pady=10)
+        # ------------------------- Menú con pestañas -------------------------
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill="both", expand=True, pady=10)
         
-        menu_frame.columnconfigure(0, weight=1)
-        menu_frame.columnconfigure(1, weight=1)
+        # Pestaña Consulta
+        consulta_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(consulta_frame, text="Consulta")
+        
+        # Pestaña Ingreso
+        income_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(income_frame, text="Ingresar")
+        
+        # Pestaña Configuración
+        config_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(config_frame, text="Configuración")
 
-        buttons_data = [
+        # Pestaña Datos Mensuales
+        datosmensuales_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(datosmensuales_frame, text="Datos Mensuales")
+        
+        # Pestaña Otros
+        other_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(other_frame, text="Otros")
+
+        # ------------------------- Contenido de las pestañas -------------------------
+        # Menú Balance - MODIFICADO: Agregados botones de consulta
+        consulta_buttons = [
             ("Balance Inicial", self._open_balance_inicial),
             ("Balance Final", self._open_final_balance),
-            ("Información Adicional Balance", self._open_informacion_adicional_balance),
             ("Estado de Resultados", self._open_estado_resultados),
+            ("Consulta Professional", self._open_consulta_professional),
+            ("Consulta HOME", self._open_consulta_home)
+        ]
+        
+        for i, (text, command) in enumerate(consulta_buttons):
+            ttk.Button(
+                consulta_frame, 
+                text=text, 
+                command=command, 
+                width=30
+            ).grid(row=i, column=0, padx=10, pady=5, sticky='ew')
+        
+        # Menú Ingreso
+        income_buttons = [
+            ("Caja", self._open_caja),
+            ("Productos", self._open_productos),
+            ("Venta Proyectada", self._open_venta_proyectada),
+            ("Información Adicional Balance", self._open_informacion_adicional_balance),
+            ("Precio Materia Prima", self._open_precio_materia_prima),
+            ("Investigación de Mercado", self._open_investigacion_mercado),
+            ("Resumen del Juego", self._open_resumen_juego),
+            ("Préstamo", self._open_prestamo)
+        ]
+        
+        for i, (text, command) in enumerate(income_buttons):
+            ttk.Button(
+                income_frame, 
+                text=text, 
+                command=command, 
+                width=30
+            ).grid(row=i, column=0, padx=10, pady=5, sticky='ew')
+        
+        # Menú Configuración
+        config_buttons = [
             ("Control del Sistema", self._open_control_sistema),
             ("Datos Físicos Inventario", self._open_datos_fisicos_inventario),
-            ("Estado Caja", self._open_caja),
-            ("Productos", self._open_productos),
             ("Datos Período Anterior", self._open_datos_periodo_anterior),
-            ("Investigación de Mercado", self._open_investigacion_mercado),
-            ("Precio Materia Prima", self._open_precio_materia_prima),
-            ("Préstamo", self._open_prestamo),
-            ("Publicidad", self._open_publicidad),
             ("Ventas por País", self._open_ventas_por_pais),
-            ("Resumen del Juego", self._open_resumen_juego),
-            ("Venta Proyectada", self._open_venta_proyectada),
+            ("Publicidad", self._open_publicidad)
+        ]
+        
+        for i, (text, command) in enumerate(config_buttons):
+            ttk.Button(
+                config_frame, 
+                text=text, 
+                command=command, 
+                width=30
+            ).grid(row=i, column=0, padx=10, pady=5, sticky='ew')
+        
+        # Menú Datos Mensuales
+        datosmensuales_buttons = [
+          ("Datos Mensuales UF", self._open_datos_uf) ,
+          ("Datos Mensuales UTM", self._open_datos_utm)  
+        ]
+        
+        for i, (text, command) in enumerate(datosmensuales_buttons):
+            ttk.Button(
+                datosmensuales_frame, 
+                text=text, 
+                command=command, 
+                width=30
+            ).grid(row=i, column=0, padx=10, pady=5, sticky='ew')
+        
+        # Menú Otros (actualizado con el nuevo botón)
+        other_buttons = [
             ("Modelo HOME", self._open_modelo_home),
             ("Modelo PROFESSIONAL", self._open_modelo_professional),
             ("Ventas Pagadas Periodo HOME", self._open_ventas_pagadas_home),
             ("Ventas Pagadas Periodo PROFESSIONAL", self._open_ventas_pagadas_professional),
-            ("Listado de Observaciones", self._open_listado_observaciones),
+            ("Listado de Observaciones", self._open_listado_observaciones)
         ]
-
-        for i, (text, command) in enumerate(buttons_data):
-            row = i // 2
-            col = i % 2
+        
+        for i, (text, command) in enumerate(other_buttons):
             ttk.Button(
-                menu_frame, 
+                other_frame, 
                 text=text, 
                 command=command, 
                 width=30
-            ).grid(row=row, column=col, padx=10, pady=5, sticky='ew')
+            ).grid(row=i, column=0, padx=10, pady=5, sticky='ew')
     
     def _populate_company_dropdown(self):
         companies = self.controller.get_companies()
@@ -383,7 +558,7 @@ class MainMenu(tk.Tk):
         self.deiconify()
 
     def _open_productos(self):
-        from homeprofessional import ProductsSelectionUI
+        from Interfaces.homeprofessional import ProductsSelectionUI
         self._open_interface(ProductsSelectionUI)
 
     def _open_balance_inicial(self):
@@ -466,7 +641,7 @@ class MainMenu(tk.Tk):
             self.current_company_id,
             self.current_company_name.get(),
             self.current_period.get()
-    )
+        )
 
     def _open_modelo_professional(self):
         abrir_modelo_professional(
@@ -474,28 +649,110 @@ class MainMenu(tk.Tk):
             self.current_company_id,
             self.current_company_name.get(),
             self.current_period.get()
-    )
+        )
     def _open_ventas_pagadas_home(self):
         abrir_ventas_pagadas_home(
             self,
             self.current_company_id,
             self.current_company_name.get(),
             self.current_period.get()
-    )
+        )
     def _open_ventas_pagadas_professional(self):
         abrir_ventas_pagadas_professional(
             self,
             self.current_company_id,
             self.current_company_name.get(),
             self.current_period.get()
-    )
+        )
+    
     def _open_listado_observaciones(self):
         abrir_listado_observaciones(
             self,
             self.current_company_id,
             self.current_company_name.get(),
             self.current_period.get()
-    )
+        )
+        
+    # MÉTODOS PARA ABRIR CONSULTAS
+    def _open_consulta_professional(self):
+        """Abre la ventana de consulta Professional"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_professional(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+        
+    def _open_consulta_home(self):
+        """Abre la ventana de consulta Home"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_home(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+        
+    # Nuevo método para abrir la interfaz de datos UF
+    def _open_datos_uf(self):
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        self.withdraw()
+        try:
+            from Datos.uf import UFDataUI
+
+            child_window = UFDataUI(
+                parent_app=self,
+                company_id=self.current_company_id,
+                company_name=self.current_company_name.get(),
+                period=self.current_period.get(),
+                model=self.controller.model  # Pasamos el modelo para acceso a datos
+            )
+            child_window.protocol("WM_DELETE_WINDOW", lambda: self._on_child_closing(child_window))
+        except ImportError as e:
+            logger.error(f"Error importing UF data module: {str(e)}")
+            messagebox.showerror("Error", f"No se pudo importar el módulo de datos UF: {str(e)}")
+            self.deiconify()
+        except Exception as e:
+            logger.error(f"Error opening UF data interface: {str(e)}")
+            messagebox.showerror("Error", f"No se pudo abrir la interfaz de datos UF: {str(e)}")
+            self.deiconify()
+    
+     # Nuevo método para abrir la interfaz de datos UTM
+    def _open_datos_utm(self):
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        self.withdraw()
+        try:
+            from Datos.utm import UTMDataUI
+            child_window = UTMDataUI(
+                parent_app=self,
+                company_id=self.current_company_id,
+                company_name=self.current_company_name.get(),
+                period=self.current_period.get(),
+                model=self.controller.model  # Pasamos el modelo para acceso a datos
+            )
+            child_window.protocol("WM_DELETE_WINDOW", lambda: self._on_child_closing(child_window))
+        except ImportError as e:
+            logger.error(f"Error importing UTM data module: {str(e)}")
+            messagebox.showerror("Error", f"No se pudo importar el módulo de datos UTM: {str(e)}")
+            self.deiconify()
+        except Exception as e:
+            logger.error(f"Error opening UTM data interface: {str(e)}")
+            messagebox.showerror("Error", f"No se pudo abrir la interfaz de datos UTM: {str(e)}")
+            self.deiconify()
+
     def _on_closing(self):
         """Maneja el cierre de la aplicación principal"""
         if messagebox.askokcancel("Salir", tr("exit_confirm")):
@@ -503,7 +760,7 @@ class MainMenu(tk.Tk):
 
 # ------------------------- Punto de Entrada -------------------------
 if __name__ == "__main__":
-    DB_FILE = Path(__file__).parent.parent / "captop.db"
+    DB_FILE = Path(__file__).parent/ "captop.db"
     
     company_model = CompanyModel(DB_FILE)
     main_controller = MainController(company_model)

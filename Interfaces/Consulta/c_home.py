@@ -1,11 +1,12 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import json
 import sqlite3
 import logging
 from pathlib import Path
 from typing import Dict, Optional, Any
-from Interfaces.translations import tr
+
+# Configurar logging
+logger = logging.getLogger(__name__)
 
 class BusinessGameModel:
     """Modelo para manejar los datos del juego de empresas."""
@@ -18,66 +19,6 @@ class BusinessGameModel:
         conn.row_factory = sqlite3.Row
         return conn
     
-    def init_schema(self):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS company (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    cash_usd REAL NOT NULL DEFAULT 0.0,
-                    current_period INTEGER NOT NULL DEFAULT 0,
-                    reporting_currency_exchange_rate REAL NOT NULL DEFAULT 950.0
-                );
-            """)
-            
-            # Verificar si la tabla decision ya existe
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='decision';")
-            table_exists = cursor.fetchone() is not None
-            
-            if not table_exists:
-                # Crear la tabla con el nuevo campo product_type
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS decision (
-                        company_id INTEGER NOT NULL,
-                        period INTEGER NOT NULL,
-                        product_type TEXT NOT NULL,
-                        payload TEXT NOT NULL,
-                        PRIMARY KEY (company_id, period, product_type)
-                    );
-                """)
-            else:
-                # Verificar si la columna product_type ya existe
-                cursor.execute("PRAGMA table_info(decision)")
-                columns = cursor.fetchall()
-                column_names = [column[1] for column in columns]
-                
-                if 'product_type' not in column_names:
-                    # Crear una tabla temporal con la nueva estructura
-                    cursor.execute("""
-                        CREATE TABLE decision_temp (
-                            company_id INTEGER NOT NULL,
-                            period INTEGER NOT NULL,
-                            product_type TEXT NOT NULL DEFAULT 'professional',
-                            payload TEXT NOT NULL,
-                            PRIMARY KEY (company_id, period, product_type)
-                        );
-                    """)
-                    
-                    # Copiar datos de la tabla original a la temporal
-                    cursor.execute("""
-                        INSERT INTO decision_temp (company_id, period, payload)
-                        SELECT company_id, period, payload FROM decision;
-                    """)
-                    
-                    # Eliminar la tabla original
-                    cursor.execute("DROP TABLE decision;")
-                    
-                    # Renombrar la tabla temporal
-                    cursor.execute("ALTER TABLE decision_temp RENAME TO decision;")
-            
-            conn.commit()
-            
     def get_companies(self) -> list:
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -91,88 +32,54 @@ class BusinessGameModel:
             row = cursor.fetchone()
             return dict(row) if row else None
     
-    def create_company(self, name: str) -> bool:
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()                
-                cursor.execute(
-                    "INSERT INTO company (name, cash_usd, current_period, reporting_currency_exchange_rate) VALUES (?, ?, ?, ?)",
-                    (name, 1000000.0, int(tr("initial_period")), 950.0))
-                conn.commit()
-                return True
-        except sqlite3.IntegrityError:
-            logger.error(f"Empresa ya existe: {name}")
-            return False
-        except Exception as e:
-            logger.error(f"Error al crear empresa: {str(e)}")
-            return False
-    
-    def save_decisions(self, company_id: int, period: int, data: Dict, product_type: str = 'professional') -> bool:
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "REPLACE INTO decision (company_id, period, product_type, payload) VALUES (?, ?, ?, ?)",
-                    (company_id, period, product_type, json.dumps(data))
-                )
-                conn.commit()
-                return True
-        except Exception as e:
-            logging.error(f"Error al guardar decisiones: {str(e)}")
-            return False
-    
-    def load_decisions(self, company_id: int, period: int, product_type: str = 'professional') -> Optional[Dict]:
+    def get_home_decisions(self, company_id: int, period: int) -> Optional[Dict]:
+        """Obtiene las decisiones de home desde la base de datos"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT payload FROM decision WHERE company_id = ? AND period = ? AND product_type = ?",
-                (company_id, period, product_type)
+                "SELECT payload FROM decision WHERE company_id = ? AND period = ? AND product_type = 'home'",
+                (company_id, period)
             )
             row = cursor.fetchone()
-            return json.loads(row["payload"]) if row else None
+            if row:
+                import json
+                return json.loads(row["payload"])
+            return None
 
-    def increment_period(self, company_id: int) -> bool:
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE company SET current_period = current_period + 1 WHERE id = ?",
-                    (company_id,))
-                conn.commit()
-                return True
-        except Exception as e:
-            logger.error(f"Error al incrementar período: {str(e)}")
-            return False
+def abrir_consulta_home(parent_app, company_id: int, company_name: str, period: int):
+    """
+    Función para abrir la ventana de consulta Home
+    """
+    ConsultaHomeUI(parent_app, company_id, company_name, period)
 
-class ProductUI(tk.Toplevel):
-    """Interfaz base para productos."""
+class ConsultaHomeUI(tk.Toplevel):
+    """Interfaz de consulta para productos HOME (solo lectura)."""
     
-    def __init__(self, parent_app, company_id: int, company_name: str, period: int, product_type: str):
+    def __init__(self, parent_app, company_id: int, company_name: str, period: int):
         super().__init__(parent_app)
         self.parent_app = parent_app
         self.company_id = company_id
         self.company_name = company_name
         self.period = period
-        self.product_type = product_type
         
-        self.model = BusinessGameModel(Path(__file__).parent.parent / "captop.db")
-        self.model.init_schema()
+        self.model = BusinessGameModel(Path(__file__).parent.parent.parent / "captop.db")
         
         self.entry_vars = {}
         self.countries = ["Argentina", "Brasil", "Chile", "Colombia", "Mexico"]
+        self.decisions_data = None
         
         self._setup_ui()
-        self._load_initial_data()
+        self._load_data()
     
     def _setup_ui(self):
-        self.title(f"Juego de Empresas - {self.product_type.upper()}")
+        self.title(f"Consulta Home - {self.company_name} - Período {self.period}")
         self.geometry("1100x900")
         self.resizable(True, True)
         
         self._configure_styles()
         self._create_scrollable_frame()
         self._create_header()
-        self._create_company_selector()
+        self._create_company_info()
         self._create_main_sections()
         self._create_action_buttons()
     
@@ -190,10 +97,6 @@ class ProductUI(tk.Toplevel):
         style.configure('TNotebook.Tab', background='#DCDAD5')
         style.map('TNotebook.Tab', background=[('selected', '#DCDAD5')])
         style.configure('TNotebook.Tab', font=('Inter', 10, 'bold'))
-
-
-
-  
 
         style.map('TButton',
             background=[('active', '#e0e0e0')],
@@ -224,27 +127,27 @@ class ProductUI(tk.Toplevel):
         header_frame.pack(fill="x", pady=10)
         header_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(header_frame, text="JUEGO DE EMPRESAS", font=('Inter', 20, 'bold'), foreground='green').grid(row=0, column=0, pady=5)
-        ttk.Label(header_frame, text=f"PRODUCTO MODELO: NOTEBOOK {self.product_type.upper()}", font=('Inter', 12)).grid(row=1, column=0, pady=2)
+        ttk.Label(header_frame, text="CONSULTA HOME - MODO LECTURA", 
+                 font=('Inter', 20, 'bold'), foreground='blue').grid(row=0, column=0, pady=5)
+        ttk.Label(header_frame, text="PRODUCTO MODELO: NOTEBOOK HOME", 
+                 font=('Inter', 12)).grid(row=1, column=0, pady=2)
         
         self.display_period_var = tk.StringVar(value=f"PERIODO ACTUAL: {self.period}")
-        ttk.Label(header_frame, textvariable=self.display_period_var, font=('Inter', 12)).grid(row=2, column=0, pady=2)
+        ttk.Label(header_frame, textvariable=self.display_period_var, 
+                 font=('Inter', 12)).grid(row=2, column=0, pady=2)
     
-    def _create_company_selector(self):
-        company_period_frame = ttk.LabelFrame(self.scrollable_frame, text="Empresa y Período", padding=(10, 5))
-        company_period_frame.pack(fill="x", padx=10, pady=10)
+    def _create_company_info(self):
+        company_info_frame = ttk.LabelFrame(self.scrollable_frame, text="Empresa y Período", padding=(10, 5))
+        company_info_frame.pack(fill="x", padx=10, pady=10)
 
-        ttk.Label(company_period_frame, text="Empresa:").grid(row=0, column=0, padx=5, pady=2, sticky='w')
-        self.company_var = tk.StringVar()
-        self.company_combo = ttk.Combobox(company_period_frame, textvariable=self.company_var, state="readonly")
-        self.company_combo.grid(row=0, column=1, padx=5, pady=2, sticky='ew')
-        self.company_combo.bind("<<ComboboxSelected>>", self._on_company_selected)
+        # Información de la empresa (solo lectura)
+        ttk.Label(company_info_frame, text="Empresa:").grid(row=0, column=0, padx=5, pady=2, sticky='w')
+        ttk.Label(company_info_frame, text=self.company_name, font=('Inter', 10, 'bold')).grid(row=0, column=1, padx=5, pady=2, sticky='w')
         
-        ttk.Label(company_period_frame, text="Período:").grid(row=0, column=2, padx=5, pady=2, sticky='w')
-        self.period_var = tk.StringVar(value=str(self.period))
-        ttk.Label(company_period_frame, textvariable=self.period_var).grid(row=0, column=3, padx=5, pady=2, sticky='w')
+        ttk.Label(company_info_frame, text="Período:").grid(row=0, column=2, padx=5, pady=2, sticky='w')
+        ttk.Label(company_info_frame, text=str(self.period), font=('Inter', 10, 'bold')).grid(row=0, column=3, padx=5, pady=2, sticky='w')
         
-        company_period_frame.grid_columnconfigure(1, weight=1)
+        company_info_frame.grid_columnconfigure(1, weight=1)
     
     def _create_main_sections(self):
         self.create_price_credit_section()
@@ -260,82 +163,25 @@ class ProductUI(tk.Toplevel):
         button_frame = ttk.Frame(self.scrollable_frame, padding=(10, 10))
         button_frame.pack(fill="x", padx=10, pady=10)
         button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
-        button_frame.columnconfigure(2, weight=1)
 
-        ttk.Button(button_frame, text="Guardar Decisiones", command=self._save_data).grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-        ttk.Button(button_frame, text="Cargar Decisiones", command=self._load_data).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-        ttk.Button(button_frame, text="Volver al Menú Principal", command=self._on_closing).grid(row=0, column=2, padx=5, pady=5, sticky='ew')
-    
-    def _load_initial_data(self):
-        companies = self.model.get_companies()
-        self.company_combo['values'] = [name for _, name in companies]
-        
-        if companies:
-            for c_id, name in companies:
-                if c_id == self.company_id:
-                    self.company_combo.set(name)
-                    self.company_var.set(name)
-                    self.period_var.set(str(self.period))
-                    break
-            
-            if self.company_combo.get():
-                self._load_data()
-    
-    def _on_company_selected(self, event=None):
-        company_name = self.company_var.get()
-        if not company_name:
-            return
-        
-        companies = self.model.get_companies()
-        for c_id, name in companies:
-            if name == company_name:
-                self.company_id = c_id
-                break
-        
-        company_info = self.model.get_company_info(self.company_id)
-        if company_info:
-            self.period = company_info['current_period']
-            self.period_var.set(str(self.period))
-            self.display_period_var.set(f"PERIODO ACTUAL: {self.period}")
-        
-        self._load_data()
-    
-    def _save_data(self):
-        if not self.company_combo.get():
-            messagebox.showwarning("Guardar", "Seleccione una empresa primero")
-            return
-        
-        data = {}
-        for key, var in self.entry_vars.items():
-            value = var.get()
-            try:
-                data[key] = float(value) if value else 0.0
-            except ValueError:
-                data[key] = value
-        
-        # Usar el tipo de producto definido en la inicialización de la clase
-        if self.model.save_decisions(self.company_id, int(self.period_var.get()), data, self.product_type):
-            if self.model.increment_period(self.company_id):
-                self.period = int(self.period_var.get()) + 1
-                self.period_var.set(str(self.period))
-                self.display_period_var.set(f"PERIODO ACTUAL: {self.period}")
-                messagebox.showinfo("Éxito", "Decisiones guardadas y período actualizado")
-            else:
-                messagebox.showerror("Error", "Decisiones guardadas pero no se pudo actualizar el período")
-        else:
-            messagebox.showerror("Error", "Error al guardar decisiones")
+        ttk.Button(button_frame, text="Volver al Menú Principal", command=self._on_closing).pack(pady=5, fill="x")
     
     def _load_data(self):
-        decisions = self.model.load_decisions(self.company_id, int(self.period_var.get()), self.product_type)
-        if decisions:
-            for key, value in decisions.items():
-                if key in self.entry_vars:
-                    self.entry_vars[key].set(str(value))
+        """Carga los datos desde la base de datos"""
+        self.decisions_data = self.model.get_home_decisions(self.company_id, self.period)
+        
+        if not self.decisions_data:
+            messagebox.showinfo("Información", "No hay datos guardados para este período.")
+            return
+        
+        # Llenar todos los campos con los datos de la base de datos
+        for key, var in self.entry_vars.items():
+            value = self.decisions_data.get(key, "")
+            var.set(str(value) if value is not None else "")
     
     def _on_closing(self):
         self.destroy()
-        self.parent_app.show_main_menu()
+        self.parent_app.deiconify()
 
     def create_price_credit_section(self):
         frame = ttk.LabelFrame(self.scrollable_frame, text="PRECIOS Y CONDICIÓN DE CRÉDITO", padding=(10, 5))
@@ -364,7 +210,8 @@ class ProductUI(tk.Toplevel):
                 for s_idx, sub_h in enumerate(sub_headers):
                     key = f"price_credit_cond{r+1}_{country}_{sub_h}"
                     var = tk.StringVar()
-                    entry = ttk.Entry(frame, width=12, textvariable=var)
+                    # Entry de solo lectura
+                    entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
                     entry.grid(row=2 + r, column=1 + c_idx * 2 + s_idx, padx=2, pady=2, sticky='ew')
                     self.entry_vars[key] = var
 
@@ -389,7 +236,7 @@ class ProductUI(tk.Toplevel):
             for c_idx, country in enumerate(countries):
                 key = f"prod_trans_{row_label.replace(' ', '_').replace('/', '_').replace('.', '')}_{country}"
                 var = tk.StringVar()
-                entry = ttk.Entry(frame, width=12, textvariable=var)
+                entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
                 entry.grid(row=1 + r, column=1 + c_idx, padx=2, pady=2, sticky='ew')
                 self.entry_vars[key] = var
 
@@ -413,7 +260,7 @@ class ProductUI(tk.Toplevel):
         for c_idx, country in enumerate(countries):
             key = f"plant_purchase_condition_{country}"
             var = tk.StringVar()
-            entry = ttk.Entry(frame, width=12, textvariable=var)
+            entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
             entry.grid(row=1, column=1 + c_idx, padx=2, pady=2, sticky='ew')
             self.entry_vars[key] = var
 
@@ -438,7 +285,7 @@ class ProductUI(tk.Toplevel):
             for c_idx, country in enumerate(countries):
                 key = f"raw_materials_{row_label.replace(' ', '_').replace('/', '_').replace('.', '').replace(':', '')}_{country}"
                 var = tk.StringVar()
-                entry = ttk.Entry(frame, width=12, textvariable=var)
+                entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
                 entry.grid(row=1 + r, column=1 + c_idx, padx=2, pady=2, sticky='ew')
                 self.entry_vars[key] = var
 
@@ -463,7 +310,7 @@ class ProductUI(tk.Toplevel):
             for c_idx, country in enumerate(countries):
                 key = f"sales_points_{row_label.replace(' ', '_').replace('°', 'N').replace('.', '')}_{country}"
                 var = tk.StringVar()
-                entry = ttk.Entry(frame, width=12, textvariable=var)
+                entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
                 entry.grid(row=1 + r, column=1 + c_idx, padx=2, pady=2, sticky='ew')
                 self.entry_vars[key] = var
 
@@ -487,7 +334,7 @@ class ProductUI(tk.Toplevel):
             for c_idx, country in enumerate(countries):
                 key = f"variable_comp_{row_label.replace(' ', '_').replace('%', 'perc')}_{country}"
                 var = tk.StringVar()
-                entry = ttk.Entry(frame, width=12, textvariable=var)
+                entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
                 entry.grid(row=1 + r, column=1 + c_idx, padx=2, pady=2, sticky='ew')
                 self.entry_vars[key] = var
 
@@ -515,7 +362,7 @@ class ProductUI(tk.Toplevel):
             for c_idx, country in enumerate(countries):
                 key = f"advertising_freq_{media.replace(' ', '_').replace('.', '')}_{country}"
                 var = tk.StringVar()
-                entry = ttk.Entry(frame, width=12, textvariable=var)
+                entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
                 entry.grid(row=1 + r_idx, column=1 + c_idx, padx=2, pady=2, sticky='ew')
                 self.entry_vars[key] = var
 
@@ -539,49 +386,6 @@ class ProductUI(tk.Toplevel):
         for c_idx, country in enumerate(countries):
             key = f"investment_condition_{country}"
             var = tk.StringVar()
-            entry = ttk.Entry(frame, width=12, textvariable=var)
+            entry = ttk.Entry(frame, width=12, textvariable=var, state='readonly')
             entry.grid(row=1, column=1 + c_idx, padx=2, pady=2, sticky='ew')
             self.entry_vars[key] = var
-
-class ProductsSelectionUI(tk.Toplevel):
-    """Interfaz para seleccionar entre productos HOME y PROFESSIONAL."""
-    
-    def __init__(self, parent_app, company_id: int, company_name: str, period: int):
-        super().__init__(parent_app)
-        self.parent_app = parent_app
-        self.company_id = company_id
-        self.company_name = company_name
-        self.period = period
-        
-        self.title("Selección de Productos")
-        self.geometry("400x300")
-        self.resizable(False, False)
-        
-        self._create_widgets()
-    
-    def _create_widgets(self):
-        main_frame = ttk.Frame(self, padding="20")
-        main_frame.pack(fill="both", expand=True)
-        
-        ttk.Label(main_frame, text="SELECCIONE EL PRODUCTO", font=('Helvetica', 14, 'bold')).pack(pady=20)
-        
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill="x", pady=20)
-        
-        ttk.Button(button_frame, text="NOTEBOOK HOME", 
-                  command=lambda: self._open_product_ui("home")).pack(pady=10, fill="x")
-        ttk.Button(button_frame, text="NOTEBOOK PROFESSIONAL", 
-                  command=lambda: self._open_product_ui("pro")).pack(pady=10, fill="x")
-        
-        ttk.Button(main_frame, text="Volver", command=self._on_closing).pack(pady=10)
-    
-    def _open_product_ui(self, product_type: str):
-        self.withdraw()
-        # Asegurarse de que el tipo de producto sea 'home' o 'professional'
-        if product_type == 'pro':
-            product_type = 'professional'
-        ProductUI(self.parent_app, self.company_id, self.company_name, self.period, product_type)
-    
-    def _on_closing(self):
-        self.destroy()
-        self.parent_app.show_main_menu()
