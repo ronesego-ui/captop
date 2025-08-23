@@ -20,6 +20,10 @@ from Interfaces.Consulta.listadoobservaciones import abrir_listado_observaciones
 # IMPORTACIONES PARA LAS CONSULTAS
 from Interfaces.Consulta.c_homeprofessional import abrir_consulta_professional
 from Interfaces.Consulta.c_home import abrir_consulta_home
+from Interfaces.Consulta.c_caja import abrir_consulta_caja
+from Interfaces.Consulta.c_balanceinicial import abrir_consulta_balance_inicial
+from Interfaces.Consulta.c_balancefinal import abrir_consulta_balance_final
+from Interfaces.Consulta.c_estadoderesultado import abrir_consulta_estadoderesultado
 
 
 # ------------------------- Configuración Inicial -------------------------
@@ -394,11 +398,15 @@ class MainMenu(tk.Tk):
         # ------------------------- Contenido de las pestañas -------------------------
         # Menú Balance - MODIFICADO: Agregados botones de consulta
         consulta_buttons = [
-            ("Balance Inicial", self._open_balance_inicial),
-            ("Balance Final", self._open_final_balance),
-            ("Estado de Resultados", self._open_estado_resultados),
+            #("Balance Inicial", self._open_balance_inicial),
+            #("Balance Final", self._open_final_balance),
+            #("Estado de Resultados", self._open_estado_resultados),
             ("Consulta Professional", self._open_consulta_professional),
-            ("Consulta HOME", self._open_consulta_home)
+            ("Consulta HOME", self._open_consulta_home),
+            ("Consulta Caja", self._open_consulta_caja),
+            ("Consulta Balance Inicial", self._open_consulta_balance_inicial),
+            ("Consulta Balance Final", self._open_consulta_balance_final),
+            ("Consulta Estado de Resultado", self._open_consulta_estadoderesultado)
         ]
         
         for i, (text, command) in enumerate(consulta_buttons):
@@ -694,6 +702,58 @@ class MainMenu(tk.Tk):
             return
             
         abrir_consulta_home(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+        
+    def _open_consulta_caja(self):
+        """Abre la ventana de consulta Caja"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_caja(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+        
+    def _open_consulta_balance_inicial(self):
+        """Abre la ventana de consulta Balance Inicial"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_balance_inicial(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+        
+    def _open_consulta_balance_final(self):
+        """Abre la ventana de consulta Balance Final"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_balance_final(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+    
+    def _open_consulta_estadoderesultado(self):
+        """Abre la ventana de consulta Estado de Resultado"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_estadoderesultado(
             self,
             self.current_company_id,
             self.current_company_name.get(),
