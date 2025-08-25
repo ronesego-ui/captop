@@ -24,6 +24,8 @@ from Interfaces.Consulta.c_caja import abrir_consulta_caja
 from Interfaces.Consulta.c_balanceinicial import abrir_consulta_balance_inicial
 from Interfaces.Consulta.c_balancefinal import abrir_consulta_balance_final
 from Interfaces.Consulta.c_estadoderesultado import abrir_consulta_estadoderesultado
+from Interfaces.Consulta.c_preciomateriaprima import abrir_consulta_preciomateriaprima
+from Interfaces.Consulta.c_ventaproyectada import abrir_consulta_ventaproyectada
 
 
 # ------------------------- Configuración Inicial -------------------------
@@ -206,6 +208,7 @@ class MainController:
         self.current_company_id = None
         self.current_company_name = ""
         self.current_period = 0
+       
         
     def validate_company_name(self, name: str) -> Tuple[bool, str]:
         name = name.strip()
@@ -250,8 +253,9 @@ class MainMenu(tk.Tk):
         super().__init__()
         self.controller = controller
         self.title("Juego de Empresas - Menú Principal")
-        self.geometry("1100x640")  # Tamaño aumentado para las imágenes
+        self.geometry("1100x800")  # Tamaño aumentado para las imágenes
         self.resizable(True, True)
+        
         
         # Cargar imágenes
         self.logo_udp = self._load_image("Logos_UDP.png")
@@ -406,7 +410,9 @@ class MainMenu(tk.Tk):
             ("Consulta Caja", self._open_consulta_caja),
             ("Consulta Balance Inicial", self._open_consulta_balance_inicial),
             ("Consulta Balance Final", self._open_consulta_balance_final),
-            ("Consulta Estado de Resultado", self._open_consulta_estadoderesultado)
+            ("Consulta Estado de Resultado", self._open_consulta_estadoderesultado),
+            ("Consulta Precio Materia Prima", self._open_consulta_preciomateriaprima),
+            ("Consulta Venta Proyectada", self._open_consulta_ventaproyectada)
         ]
         
         for i, (text, command) in enumerate(consulta_buttons):
@@ -754,6 +760,32 @@ class MainMenu(tk.Tk):
             return
             
         abrir_consulta_estadoderesultado(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+    
+    def _open_consulta_preciomateriaprima(self):
+        """Abre la ventana de consulta Precio Materia Prima"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_preciomateriaprima(
+            self,
+            self.current_company_id,
+            self.current_company_name.get(),
+            self.current_period.get()
+        )
+    
+    def _open_consulta_ventaproyectada(self):
+        """Abre la ventana de consulta Venta Proyectada"""
+        if self.current_company_id is None:
+            messagebox.showwarning(tr("warning"), tr("select_company_first"))
+            return
+            
+        abrir_consulta_ventaproyectada(
             self,
             self.current_company_id,
             self.current_company_name.get(),
