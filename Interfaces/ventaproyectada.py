@@ -1,52 +1,15 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
-import json
-import sqlite3
-from pathlib import Path
-
-# --- Configuración de la Base de Datos ---
-DB_FILE = Path(__file__).parent.parent / "captop.db"
-
-def get_connection():
-    """Establece y devuelve una conexión a la base de datos."""
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_schema():
-    """Inicializa el esquema de la base de datos si no existe."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS company (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                cash_usd REAL NOT NULL DEFAULT 0.0,
-                current_period INTEGER NOT NULL DEFAULT 0,
-                reporting_currency_exchange_rate REAL NOT NULL DEFAULT 950.0
-            );
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS decision (
-                company_id INTEGER NOT NULL,
-                period INTEGER NOT NULL,
-                payload TEXT NOT NULL,
-                PRIMARY KEY (company_id, period)
-            );
-        """)
-        conn.commit()
-
-# Asegurarse de que el esquema se inicialice al inicio
-init_schema()
 
 class ProjectedSalesUI(tk.Toplevel):
-    def __init__(self, parent_app, company_id, company_name, period):
+    def __init__(self, parent_app, company_id, company_name, period, engine):
         super().__init__(parent_app)
         self.parent_app = parent_app
         self.company_id = company_id
         self.company_name_str = company_name
         self.period_int = period
+        self.engine = engine
 
         self.title(f"Venta Proyectada - {self.company_name_str} (Período {self.period_int})")
         self.geometry("1200x800")
@@ -87,7 +50,7 @@ class ProjectedSalesUI(tk.Toplevel):
         self.stock_anterior_values = {}
 
         self._create_widgets()
-        self.load_decisions_from_db(self.company_id, self.period_int)
+        self._load_data()
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
@@ -169,8 +132,8 @@ class ProjectedSalesUI(tk.Toplevel):
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
 
-        ttk.Button(button_frame, text="Guardar Decisiones", command=self.save_decisions).grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-        ttk.Button(button_frame, text="Cargar Decisiones", command=lambda: self.load_decisions_from_db(self.company_id, self.period_int)).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+        ttk.Button(button_frame, text="Guardar Decisiones", command=self._save_data).grid(row=0, column=0, padx=5, pady=5, sticky='ew')
+        ttk.Button(button_frame, text="Cargar Decisiones", command=self._load_data).grid(row=0, column=1, padx=5, pady=5, sticky='ew')
         ttk.Button(button_frame, text="Volver al Menú Principal", command=self._on_closing).grid(row=0, column=2, padx=5, pady=5, sticky='ew')
 
     def calculate_total_pais(self, product_type, country, *args):
@@ -180,112 +143,75 @@ class ProjectedSalesUI(tk.Toplevel):
         total_key = f"{product_type}_total_pais_{self._clean_key(country)}"
         stock_anterior_key = f"{product_type}_Stock_Período_Anterior_{self._clean_key(country)}"
 
-        td_value = self._get_numeric_value(self.entry_vars[td_key].get())
-        es_value = self._get_numeric_value(self.entry_vars[es_key].get())
+        td_value = self._get_numeric_value(self.entry_vars.get(td_key, tk.StringVar()).get())
+        es_value = self._get_numeric_value(self.entry_vars.get(es_key, tk.StringVar()).get())
         stock_anterior_value = self.stock_anterior_values.get(stock_anterior_key, 0.0)
 
         total_pais = sum(filter(None, [td_value, es_value, stock_anterior_value]))
         self.calculated_vars[total_key].set(f"{total_pais:,.2f}")
 
-    def save_decisions(self):
-        """Guarda los datos de venta proyectada en la base de datos."""
+    def _save_data(self):
+        """Guarda los datos de venta proyectada usando el motor del juego."""
         projected_sales_data = {}
-        
         for key, var in self.entry_vars.items():
             projected_sales_data[key] = self._get_numeric_value(var.get())
         
+        # También guardamos los valores calculados y el stock para referencia
         for key, var in self.calculated_vars.items():
             projected_sales_data[key] = self._get_numeric_value(var.get())
-        
         projected_sales_data["stock_anterior_values"] = self.stock_anterior_values
 
-        try:
-            with get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT payload FROM decision WHERE company_id = ? AND period = ?",
-                    (self.company_id, self.period_int)
-                )
-                existing_row = cursor.fetchone()
-                
-                full_payload = {}
-                if existing_row:
-                    full_payload = json.loads(existing_row["payload"])
-                
-                full_payload["projected_sales_data"] = projected_sales_data
-                
-                json_payload = json.dumps(full_payload)
+        success = self.engine.save_decision(
+            company_id=self.company_id,
+            period=self.period_int,
+            decision_type='projected_sales',
+            data=projected_sales_data
+        )
 
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO decision (company_id, period, payload)
-                    VALUES (?, ?, ?)
-                    """,
-                    (self.company_id, self.period_int, json_payload)
-                )
-                conn.commit()
-                messagebox.showinfo("Guardar Decisiones", f"Venta proyectada guardada para el período {self.period_int}.")
-        except Exception as e:
-            messagebox.showerror("Error al Guardar", f"Error al guardar la venta proyectada: {e}")
+        if success:
+            messagebox.showinfo("Guardar Decisiones", f"Venta proyectada guardada para el período {self.period_int}.")
+        else:
+            messagebox.showerror("Error al Guardar", "No se pudo guardar la decisión de venta proyectada.")
 
-    def load_decisions_from_db(self, company_id, current_period):
+    def _load_data(self):
         """Carga los datos de venta proyectada del período y rellena la UI."""
         self.clear_all_fields()
 
         try:
-            with get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Cargar Stock Período Anterior desde resumenjuego1.py (del período ACTUAL)
-                cursor.execute(
-                    "SELECT payload FROM decision WHERE company_id = ? AND period = ?",
-                    (company_id, current_period)
-                )
-                summary_row = cursor.fetchone()
-                
-                if summary_row:
-                    summary_payload = json.loads(summary_row["payload"])
-                    loaded_summary_data = summary_payload.get("summary_data", {})
-
-                    countries = ["Argentina", "Brasil", "Chile", "Colombia", "Mexico"]
-                    item_stock_key_base = "Stock_Período_Anterior"
-
-                    for product_type in ["home", "pro"]:
-                        for country in countries:
-                            db_key = f"{product_type}_{item_stock_key_base}_{self._clean_key(country)}"
-                            stock_value = loaded_summary_data.get(db_key)
-                            self.stock_anterior_values[db_key] = self._get_numeric_value(str(stock_value)) if stock_value is not None else 0.0
-                else:
-                    # Si no hay datos del período anterior, establecer todos los stocks a 0
-                    for product_type in ["home", "pro"]:
-                        for country in ["Argentina", "Brasil", "Chile", "Colombia", "Mexico"]:
-                            db_key = f"{product_type}_Stock_Período_Anterior_{self._clean_key(country)}"
-                            self.stock_anterior_values[db_key] = 0.0
-
-                # Cargar las ventas proyectadas para el período actual
-                cursor.execute(
-                    "SELECT payload FROM decision WHERE company_id = ? AND period = ?",
-                    (company_id, current_period)
-                )
-                current_period_row = cursor.fetchone()
-
-                if current_period_row:
-                    current_payload = json.loads(current_period_row["payload"])
-                    loaded_projected_sales_data = current_payload.get("projected_sales_data", {})
-                    
-                    for key, var in self.entry_vars.items():
-                        if key in loaded_projected_sales_data and loaded_projected_sales_data[key] is not None:
-                            var.set(str(loaded_projected_sales_data[key]))
-                    
-                    for key, var in self.calculated_vars.items():
-                        if key in loaded_projected_sales_data and loaded_projected_sales_data[key] is not None:
-                            var.set(f"{float(loaded_projected_sales_data[key]):,.2f}")
-
-                    messagebox.showinfo("Cargar Venta Proyectada", f"Venta proyectada cargada para el período {current_period}.")
-                else:
-                    messagebox.showinfo("Cargar Venta Proyectada", f"No se encontraron datos de venta proyectada para el período {current_period}.")
+            # Cargar Stock Período Anterior (asumiendo que viene de una decisión 'summary')
+            summary_data = self.engine.load_decision(self.company_id, self.period_int, 'summary')
+            if summary_data:
+                loaded_summary_data = summary_data.get("summary_data", {})
+                countries = ["Argentina", "Brasil", "Chile", "Colombia", "Mexico"]
+                item_stock_key_base = "Stock_Período_Anterior"
+                for product_type in ["home", "pro"]:
+                    for country in countries:
+                        db_key = f"{product_type}_{item_stock_key_base}_{self._clean_key(country)}"
+                        stock_value = loaded_summary_data.get(db_key)
+                        self.stock_anterior_values[db_key] = self._get_numeric_value(str(stock_value)) if stock_value is not None else 0.0
             
-            # Recalcular totales después de cargar
+            # Cargar las ventas proyectadas para el período actual
+            projected_sales_data = self.engine.load_decision(self.company_id, self.period_int, 'projected_sales')
+
+            if projected_sales_data:
+                for key, var in self.entry_vars.items():
+                    if key in projected_sales_data and projected_sales_data[key] is not None:
+                        var.set(str(projected_sales_data[key]))
+                
+                # Cargar valores calculados también, si existen
+                for key, var in self.calculated_vars.items():
+                    if key in projected_sales_data and projected_sales_data[key] is not None:
+                        var.set(f"{float(projected_sales_data[key]):,.2f}")
+                
+                # Cargar stock anterior si estaba guardado
+                if "stock_anterior_values" in projected_sales_data:
+                    self.stock_anterior_values = projected_sales_data["stock_anterior_values"]
+
+                messagebox.showinfo("Cargar Venta Proyectada", f"Venta proyectada cargada para el período {self.period_int}.")
+            else:
+                messagebox.showinfo("Cargar Venta Proyectada", f"No se encontraron datos de venta proyectada para el período {self.period_int}.")
+
+            # Recalcular totales después de cargar todos los datos
             for product_type in ["home", "pro"]:
                 for country in ["Argentina", "Brasil", "Chile", "Colombia", "Mexico"]:
                     self.calculate_total_pais(product_type, country)
